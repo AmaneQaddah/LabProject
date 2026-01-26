@@ -18,17 +18,18 @@ WORLDCUP_PATH = os.getenv("WORLDCUP_PARQUET_PATH", "data/worldcup_mapped_parquet
 # ----------------------------
 # Helpers: read Spark parquet folder (ALL part files)
 # ----------------------------
-def _read_spark_parquet_folder(folder_path: str, required: bool = True) -> pd.DataFrame:
+def _read_spark_parquet_folder(folder_path: str) -> pd.DataFrame:
     part_files = sorted(
-        glob.glob(os.path.join(folder_path, "part-*.parquet"))
-        + glob.glob(os.path.join(folder_path, "part-*"))
+        glob.glob(os.path.join(folder_path, "part-*.parquet")) +
+        glob.glob(os.path.join(folder_path, "part-*"))
     )
     part_files = [p for p in part_files if os.path.basename(p).startswith("part-")]
-
     if not part_files:
-        if required:
-            raise FileNotFoundError(f"No parquet part files found in: {folder_path}")
-        return pd.DataFrame()
+        raise FileNotFoundError(f"No parquet part files found in: {folder_path}")
+
+    dfs = [pd.read_parquet(p) for p in part_files]
+    return pd.concat(dfs, ignore_index=True)
+
 
     dfs = []
     for p in part_files:
@@ -362,3 +363,4 @@ def recommend_publish_date(
         "best": _pack(best),
         "alternatives": alternatives,
     }, None
+
