@@ -1,0 +1,7 @@
+pandas
+pyarrow
+fastapi
+uvicorn
+streamlit
+requests
+python-dateutil
