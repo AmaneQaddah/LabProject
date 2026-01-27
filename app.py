@@ -11,7 +11,7 @@ DEFAULT_BASE_LEAD_DAYS = 14  # hidden
 DEFAULT_TOP_K_BY_TIME = 60   # hidden
 
 st.title("📢 Ad Publish Date Recommender  🏡✨")
-st.caption("Pick a property, and we’ll rank upcoming holidays + events and recommend publish date + pricing uplift (%)")
+st.caption("Pick a property, and we’ll rank upcoming holidays and recommend a publish date + pricing uplift (%)")
 
 property_id = st.text_input("Property ID", placeholder="Paste your property_id (exactly as in the dataset)")
 today = st.date_input("Today", value=date.today())
@@ -55,18 +55,20 @@ if run:
 
     best = result["best"]
     country = result["country"].title()
+
     st.success("Recommendation found!")
 
     # Top metrics (NO lead days)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Country", country)
     m2.metric("Event type", str(best.get("event_type", "")).title())
+    m3.metric("Publish date", best["publish_date"].strftime("%m-%d"))
     m4.metric("Score", f"{best['score']:.4f}")
 
     # Pricing metrics
     p1, p2, p3 = st.columns(3)
-    p1.metric("Uplift (%)", f"{best['price_uplift_pct']:.1f}%")
-    p2.metric("Base price", f"{best['base_price_used']:.2f}" if best.get("base_price_used") is not None else "N/A")
+    p1.metric("Uplift (%)", f"{best['uplift_pct']:.1f}%")
+    p2.metric("Base price", f"{best['base_price']:.2f}" if best.get("base_price") is not None else "N/A")
     p3.metric("Recommended price", f"{best['recommended_price']:.2f}" if best.get("recommended_price") is not None else "N/A")
 
     with st.container(border=True):
@@ -77,9 +79,9 @@ if run:
 
         st.divider()
         st.markdown("**Pricing recommendation:**")
-        st.write(f"Increase by **{best['price_uplift_pct']:.1f}%**")
-        if best.get("recommended_price") is not None:
-            st.write(f"→ Suggested nightly price: **{best['recommended_price']:.2f}** (base: {best['base_price_used']:.2f})")
+        st.write(f"Increase by **{best['uplift_pct']:.1f}%**")
+        if best.get("recommended_price") is not None and best.get("base_price") is not None:
+            st.write(f"→ Suggested nightly price: **{best['recommended_price']:.2f}** (base: {best['base_price']:.2f})")
 
         st.divider()
         st.markdown("**Campaign window:**")
@@ -91,12 +93,15 @@ if run:
         if best.get("why"):
             st.info(f"Why: {best['why']}")
 
+    # Alternatives table
     alts = result.get("alternatives", [])
     if alts:
         st.subheader("✨ Top alternatives")
-        df = pd.DataFrame(alts)
+        df = pd.DataFrame(alts).copy()
         df["event_date"] = df["event_date"].apply(lambda d: d.strftime("%Y-%m-%d"))
         df["publish_date"] = df["publish_date"].apply(lambda d: d.strftime("%Y-%m-%d"))
+        df["uplift_pct"] = df["uplift_pct"].apply(lambda x: round(float(x), 1))
+        df["score"] = df["score"].apply(lambda x: round(float(x), 4))
 
-        cols = ["event_type", "event", "event_date", "publish_date"]
-        st.dataframe(df[cols], use_container_width=True)
+        show_cols = ["event_type", "event", "event_date", "publish_date", "score", "uplift_pct"]
+        st.dataframe(df[show_cols], use_container_width=True)
