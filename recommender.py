@@ -11,9 +11,8 @@ from functools import lru_cache
 # ----------------------------
 # Configuration (data paths)
 # ----------------------------
-AIRBNB_PATH = os.getenv("AIRBNB_PARQUET_PATH", "data/airbnb_sample_parquet")
-HOLIDAYS_PATH = os.getenv("HOLIDAYS_PARQUET_PATH", "data/holidays_mapped_parquet")
-WORLDCUP_PATH = os.getenv("WORLDCUP_PARQUET_PATH", "data/worldcup_mapped_parquet")  # optional
+AIRBNB_PATH = "data/airbnb_sample_100.csv"
+HOLIDAYS_PATH = "data/holidays_sample_100.csv"
 
 # ----------------------------
 # Helpers: read Spark parquet folder (ALL part files)
@@ -181,9 +180,8 @@ def _extract_base_price(airbnb_row: pd.Series) -> Optional[float]:
 
 @lru_cache(maxsize=1)
 def _load_events_cached() -> tuple[pd.DataFrame, pd.DataFrame]:
-    airbnb = _read_spark_parquet_folder(AIRBNB_PATH, required=True)
-    holidays = _read_spark_parquet_folder(HOLIDAYS_PATH, required=True)
-    worldcup = _read_spark_parquet_folder(WORLDCUP_PATH, required=False)
+    airbnb = pd.read_csv(AIRBNB_PATH)
+    holidays = pd.read_csv(HOLIDAYS_PATH)
 
     # Airbnb normalize
     if "property_id" not in airbnb.columns or "country_mapped" not in airbnb.columns:
@@ -363,4 +361,5 @@ def recommend_publish_date(
         "best": _pack(best),
         "alternatives": alternatives,
     }, None
+
 
