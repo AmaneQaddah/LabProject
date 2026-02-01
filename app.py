@@ -1,4 +1,3 @@
-# app.py
 from datetime import date
 import pandas as pd
 import streamlit as st
@@ -13,7 +12,43 @@ DEFAULT_TOP_K_BY_TIME = 60    # hidden (take nearest events first)
 st.title("🚀 HOSTBOOST")
 st.caption("Choose a listing and get the best event-based publish date + a bounded pricing uplift based on demand (score) and quality (rating).")
 
-property_id = st.text_input("Property ID", placeholder="Paste your property_id (exactly as in the dataset)")
+# -------------------------
+# Try it (sample IDs)
+# -------------------------
+SAMPLE_IDS = [
+    ("37869337", "spain"),
+    ("1156514676373700041", "us"),
+    ("18481658", "germany"),
+    ("45988040", "italy"),
+    ("1068965369867499559", "us"),
+    ("918228162176508093", "portugal"),
+    ("758010369562201041", "us"),
+    ("917794029648757828", "norway"),
+    ("842701729906037201", "us"),
+    ("5301264", "ireland"),
+]
+
+if "property_id_input" not in st.session_state:
+    st.session_state["property_id_input"] = ""
+
+with st.expander("🚀 Try it (sample IDs)", expanded=False):
+    st.write("Click a button to auto-fill **Property ID**:")
+    cols = st.columns(2)
+    for i, (pid, country) in enumerate(SAMPLE_IDS):
+        with cols[i % 2]:
+            if st.button(f"{pid}  ({country})", use_container_width=True, key=f"sample_{pid}"):
+                st.session_state["property_id_input"] = pid
+                st.toast(f"Loaded Property ID: {pid}", icon="✅")
+
+# -------------------------
+# Inputs
+# -------------------------
+property_id = st.text_input(
+    "Property ID",
+    placeholder="Paste your property_id (exactly as in the dataset)",
+    key="property_id_input"
+)
+
 today = st.date_input("Today", value=date.today())
 
 base_price = st.number_input(
