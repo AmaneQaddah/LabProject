@@ -27,17 +27,21 @@ MAJOR_KEYWORDS = [
     "revolution", "unification", "labor", "mayday",
 ]
 
+
 def _norm_tokens(s: str) -> str:
     s = (s or "").lower()
     return "".join(ch for ch in s if ch.isalnum())
+
 
 def _is_major_event(event_name: str) -> bool:
     n = _norm_tokens(event_name)
     return any(k in n for k in MAJOR_KEYWORDS)
 
+
 def _weekend_boost(d: pd.Timestamp) -> float:
     wd = d.weekday()  # Mon=0..Sun=6
     return 1.18 if wd in (4, 5, 6) else 1.0  # Fri/Sat/Sun
+
 
 def _season_boost(d: pd.Timestamp) -> float:
     m = d.month
@@ -46,6 +50,7 @@ def _season_boost(d: pd.Timestamp) -> float:
     if m in (11, 12):
         return 1.06
     return 1.0
+
 
 def _type_weight(holiday_type: Optional[str]) -> float:
     ht = (holiday_type or "")
@@ -71,9 +76,11 @@ def _type_weight(holiday_type: Optional[str]) -> float:
 
     return 0.75
 
+
 def _lead_days_used(base_lead: int, is_major: bool) -> int:
     # used only for publish date logic (not for score)
     return max(base_lead, 21) if is_major else base_lead
+
 
 def _why_tags(row: pd.Series) -> str:
     tags: List[str] = []
@@ -87,13 +94,83 @@ def _why_tags(row: pd.Series) -> str:
         tags.append(f"Type: {row['holiday_type']}")
     return ", ".join(tags)
 
+
 # =========================
-# Pricing uplift heuristic (days_to_event affects only pricing, NOT score)
+# Rating / quality helpers (stable, low-risk)
 # =========================
-def _price_uplift_pct(score: float, days_to_event: int, is_major: bool, is_weekend: bool, holiday_type: Optional[str]) -> float:
+RATING_CANDIDATES = [
+    "rating", "ratings", "review_rating", "avg_rating", "overall_rating",
+    "category_rating"
+]
+
+
+def _extract_first_number_from_any(v) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s:
+            return None
+        # keep digits and dot only (first number)
+        num = ""
+        seen = False
+        for ch in s:
+            if ch.isdigit() or (ch == "." and seen):
+                num += ch
+            elif ch.isdigit():
+                seen = True
+                num += ch
+            elif seen:
+                break
+        x = float(num) if num else None
+        if x is None or math.isnan(x) or x <= 0:
+            return None
+        return x
+    except Exception:
+        return None
+
+
+def _get_rating_value(airbnb_row: pd.Series) -> Optional[float]:
+    for col in RATING_CANDIDATES:
+        if col in airbnb_row.index:
+            x = _extract_first_number_from_any(airbnb_row.get(col))
+            if x is not None:
+                return x
+    return None
+
+
+def _quality_factor_from_rating(rating_value: Optional[float]) -> float:
+    """
+    Map rating -> multiplicative factor in a tight range (doesn't explode).
+    Assumption: rating on a 0..5 scale. Missing -> neutral.
+    """
+    if rating_value is None:
+        return 1.00  # neutral if missing
+    r = float(rating_value)
+    # guard rails for odd scales
+    if r > 5.0 and r <= 100.0:
+        r = (r / 100.0) * 5.0
+    r = max(0.0, min(r, 5.0))
+    r_norm = r / 5.0  # 0..1
+    # 0.90 .. 1.10 (tight)
+    return 0.90 + 0.20 * r_norm
+
+
+# =========================
+# Pricing uplift heuristic
+# - Score controls uplift monotonically
+# - days_to_event affects ONLY urgency (small add)
+# - quality factor scales uplift (safe)
+# =========================
+def _price_uplift_pct(score: float, days_to_event: int, is_major: bool, is_weekend: bool,
+                     holiday_type: Optional[str], quality_factor: float) -> float:
+    # monotonic mapping from score -> 0..1
     score_norm = 1.0 - math.exp(-max(score, 0.0) / 1.2)  # 0..1
+
+    # base uplift from score (monotonic)
     pct = score_norm * 22.0
 
+    # add small boosts (still monotonic w.r.t score for a fixed listing)
     if is_major:
         pct += 6.0
     if is_weekend:
@@ -113,8 +190,13 @@ def _price_uplift_pct(score: float, days_to_event: int, is_major: bool, is_weeke
     elif "half-day" in ht or "silent day" in ht:
         pct -= 2.0
 
+    # apply quality factor (tight range)
+    pct = pct * float(quality_factor)
+
+    # hard cap (stable)
     pct = max(0.0, min(pct, 45.0))
     return round(pct, 1)
+
 
 def _safe_float(v) -> Optional[float]:
     try:
@@ -129,13 +211,16 @@ def _safe_float(v) -> Optional[float]:
     except Exception:
         return None
 
+
 def _extract_base_price(airbnb_row: pd.Series) -> Optional[float]:
-    for col in ["nightly_price", "price", "base_price", "avg_price"]:
+    # extended to support typical cleaned columns
+    for col in ["nightly_price", "price_clean", "total_price_clean", "price", "base_price", "avg_price"]:
         if col in airbnb_row.index:
             x = _safe_float(airbnb_row.get(col))
             if x is not None:
                 return x
     return None
+
 
 @lru_cache(maxsize=1)
 def _load_airbnb() -> pd.DataFrame:
@@ -149,6 +234,7 @@ def _load_airbnb() -> pd.DataFrame:
     df["property_id"] = df["property_id"].astype(str).str.strip()
     df["country_mapped"] = df["country_mapped"].astype(str).str.strip().str.lower()
     return df
+
 
 @lru_cache(maxsize=1)
 def _load_holidays() -> pd.DataFrame:
@@ -179,6 +265,7 @@ def _load_holidays() -> pd.DataFrame:
     df["event_name"] = df["holiday_name"].astype(str)
     df["event_type"] = "holiday"
     return df[["country_mapped", "event_name", "date", "event_type", "holiday_type"]].copy()
+
 
 def recommend_publish_date(
     property_id: str,
@@ -211,6 +298,10 @@ def recommend_publish_date(
     data_price = _extract_base_price(airbnb_row)
     base_price_used = user_price if user_price is not None else data_price
 
+    # rating / quality factor
+    rating_value = _get_rating_value(airbnb_row)
+    quality_factor = _quality_factor_from_rating(rating_value)
+
     today_dt = pd.to_datetime(today).normalize()
     max_dt = today_dt + pd.Timedelta(days=int(lookahead_days))
 
@@ -222,6 +313,7 @@ def recommend_publish_date(
     if e.empty:
         return None, "No upcoming holidays in the selected lookahead window"
 
+    # keep only nearest N events by time (speed & stable)
     e = e.sort_values("date").head(int(top_k_by_time)).copy()
 
     e["days_to_event"] = (e["date"] - today_dt).dt.days
@@ -253,7 +345,7 @@ def recommend_publish_date(
 
     e["why"] = e.apply(_why_tags, axis=1)
 
-    # pricing uplift (time affects only pricing)
+    # pricing uplift: score + urgency + quality (safe)
     e["uplift_pct"] = e.apply(
         lambda r: _price_uplift_pct(
             score=float(r["score"]),
@@ -261,6 +353,7 @@ def recommend_publish_date(
             is_major=bool(r["is_major"]),
             is_weekend=bool(r["is_weekend"]),
             holiday_type=r.get("holiday_type"),
+            quality_factor=quality_factor,
         ),
         axis=1
     )
@@ -275,7 +368,7 @@ def recommend_publish_date(
 
     def _pack(r: pd.Series) -> Dict[str, Any]:
         return {
-            "event_type": "Holiday",
+            "event_type": str(r.get("event_type", "holiday")).title(),
             "event": str(r["event_name"]),
             "event_date": r["date"].date(),
             "publish_date": r["publish_date"].date(),
@@ -287,7 +380,9 @@ def recommend_publish_date(
             "uplift_pct": float(r["uplift_pct"]),
             "base_price": float(base_price_used) if base_price_used is not None else None,
             "recommended_price": float(r["recommended_price"]) if base_price_used is not None else None,
-            # נשאר פנימי (לא חייב להציג ב-UI)
+            "rating_value": float(rating_value) if rating_value is not None else None,
+            "quality_factor": float(quality_factor),
+            # internal
             "lead_days_used": int(r["lead_days_used"]),
         }
 
