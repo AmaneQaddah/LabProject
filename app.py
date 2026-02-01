@@ -5,13 +5,13 @@ import streamlit as st
 
 from recommender import recommend_publish_date
 
-st.set_page_config(page_title="Ad Publish Date Recommender", page_icon="📢", layout="centered")
+st.set_page_config(page_title="HOSTBOOST", page_icon="🚀", layout="centered")
 
-DEFAULT_BASE_LEAD_DAYS = 14  # hidden
-DEFAULT_TOP_K_BY_TIME = 60   # hidden
+DEFAULT_BASE_LEAD_DAYS = 14   # hidden
+DEFAULT_TOP_K_BY_TIME = 60    # hidden (take nearest events first)
 
-st.title("📢 Ad Publish Date Recommender  🏡✨")
-st.caption("Pick a property, and we’ll rank upcoming events and recommend a publish date + pricing uplift (%)")
+st.title("🚀 HOSTBOOST")
+st.caption("Choose a listing and get the best event-based publish date + a bounded pricing uplift based on demand (score) and quality (rating).")
 
 property_id = st.text_input("Property ID", placeholder="Paste your property_id (exactly as in the dataset)")
 today = st.date_input("Today", value=date.today())
@@ -24,7 +24,7 @@ base_price = st.number_input(
 with st.expander("⚙️ Recommendation settings (optional)", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
-        lookahead_days = st.selectbox("Lookahead window", [90, 180, 365, 730], index=2)
+        lookahead_days = st.selectbox("Lookahead window (days)", [90, 180, 365, 730], index=2)
     with col2:
         alternatives_n = st.selectbox("Alternatives to show", [0, 1, 2, 3, 4, 5], index=3)
 
@@ -67,7 +67,7 @@ if run:
 
     st.success("Recommendation found!")
 
-    # Top metrics (NO lead days)
+    # Top metrics
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Country", country if country else "N/A")
     m2.metric("Event type", str(best.get("event_type", "")).title())
@@ -117,7 +117,5 @@ if run:
         df["score"] = df["score"].apply(lambda x: round(float(x), 4))
 
         show_cols = ["event_type", "event", "event_date", "publish_date", "score", "uplift_pct", "rating_value"]
-        # keep only existing columns (safe)
         show_cols = [c for c in show_cols if c in df.columns]
-
         st.dataframe(df[show_cols], use_container_width=True)
