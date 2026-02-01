@@ -11,7 +11,7 @@ DEFAULT_BASE_LEAD_DAYS = 14  # hidden
 DEFAULT_TOP_K_BY_TIME = 60   # hidden
 
 st.title("📢 Ad Publish Date Recommender  🏡✨")
-st.caption("Pick a property, and we’ll rank upcoming holidays and recommend a publish date + pricing uplift (%)")
+st.caption("Pick a property, and we’ll rank upcoming events and recommend a publish date + pricing uplift (%)")
 
 property_id = st.text_input("Property ID", placeholder="Paste your property_id (exactly as in the dataset)")
 today = st.date_input("Today", value=date.today())
@@ -30,6 +30,7 @@ with st.expander("⚙️ Recommendation settings (optional)", expanded=True):
 
 run = st.button("Recommend", type="primary")
 
+
 @st.cache_data(show_spinner=False)
 def _cached_recommend(pid: str, today_val: date, lookahead: int, alts: int, base_price_val: float):
     return recommend_publish_date(
@@ -41,6 +42,14 @@ def _cached_recommend(pid: str, today_val: date, lookahead: int, alts: int, base
         alternatives_n=alts,
         base_price=(base_price_val if base_price_val > 0 else None),
     )
+
+
+def _pretty_country(c: str) -> str:
+    c = (c or "").strip()
+    if not c:
+        return ""
+    return c.replace("-", " ").title()
+
 
 if run:
     pid = property_id.strip()
@@ -54,22 +63,23 @@ if run:
         st.stop()
 
     best = result["best"]
-    country = result["country"].title()
+    country = _pretty_country(result.get("country", ""))
 
     st.success("Recommendation found!")
 
     # Top metrics (NO lead days)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Country", country)
+    m1.metric("Country", country if country else "N/A")
     m2.metric("Event type", str(best.get("event_type", "")).title())
     m3.metric("Publish date", best["publish_date"].strftime("%m-%d"))
     m4.metric("Score", f"{best['score']:.4f}")
 
-    # Pricing metrics
-    p1, p2, p3 = st.columns(3)
+    # Pricing + quality metrics
+    p1, p2, p3, p4 = st.columns(4)
     p1.metric("Uplift (%)", f"{best['uplift_pct']:.1f}%")
     p2.metric("Base price", f"{best['base_price']:.2f}" if best.get("base_price") is not None else "N/A")
     p3.metric("Recommended price", f"{best['recommended_price']:.2f}" if best.get("recommended_price") is not None else "N/A")
+    p4.metric("Rating", f"{best['rating_value']:.2f}" if best.get("rating_value") is not None else "N/A")
 
     with st.container(border=True):
         st.subheader("✅ Best Recommendation")
@@ -82,6 +92,9 @@ if run:
         st.write(f"Increase by **{best['uplift_pct']:.1f}%**")
         if best.get("recommended_price") is not None and best.get("base_price") is not None:
             st.write(f"→ Suggested nightly price: **{best['recommended_price']:.2f}** (base: {best['base_price']:.2f})")
+
+        if best.get("quality_factor") is not None:
+            st.caption(f"Quality factor (from rating): ×{best['quality_factor']:.2f}")
 
         st.divider()
         st.markdown("**Campaign window:**")
@@ -103,5 +116,8 @@ if run:
         df["uplift_pct"] = df["uplift_pct"].apply(lambda x: round(float(x), 1))
         df["score"] = df["score"].apply(lambda x: round(float(x), 4))
 
-        show_cols = ["event_type", "event", "event_date", "publish_date", "score", "uplift_pct"]
+        show_cols = ["event_type", "event", "event_date", "publish_date", "score", "uplift_pct", "rating_value"]
+        # keep only existing columns (safe)
+        show_cols = [c for c in show_cols if c in df.columns]
+
         st.dataframe(df[show_cols], use_container_width=True)
