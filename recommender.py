@@ -10,7 +10,7 @@ import pandas as pd
 # Data paths (CSV for deployment)
 # =========================
 AIRBNB_PATH = os.getenv("AIRBNB_CSV_PATH", "data/airbnb_sample_100.csv")
-HOLIDAYS_PATH = os.getenv("HOLIDAYS_CSV_PATH", "data/holidays_sample_100.csv")
+EVENT_PATH = os.getenv("HOLIDAYS_CSV_PATH", "data/holidays_sample_100.csv")
 
 # =========================
 # Major keywords (token-style) - same spirit as Databricks
@@ -374,5 +374,6 @@ def recommend_publish_date(
         "best": _pack(best),
         "alternatives": alternatives,
     }, None
+
 
 
