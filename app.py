@@ -1,3 +1,4 @@
+# app.py
 from datetime import date
 import pandas as pd
 import streamlit as st
@@ -7,10 +8,13 @@ from recommender import recommend_publish_date
 st.set_page_config(page_title="HOSTBOOST", page_icon="🚀", layout="centered")
 
 DEFAULT_BASE_LEAD_DAYS = 14   # hidden
-DEFAULT_TOP_K_BY_TIME = 60    # hidden (take nearest events first)
+DEFAULT_TOP_K_BY_TIME = 60    # hidden
 
 st.title("🚀 HOSTBOOST")
-st.caption("Choose a listing and get the best event-based publish date + a bounded pricing uplift based on demand (score) and quality (rating).")
+st.caption(
+    "Choose a listing and get the best event-based publish date + a bounded pricing uplift "
+    "based on demand (score) and quality (rating)."
+)
 
 # -------------------------
 # Try it (sample IDs)
