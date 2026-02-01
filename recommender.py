@@ -10,10 +10,12 @@ import pandas as pd
 # Data paths (CSV for deployment)
 # =========================
 AIRBNB_PATH = os.getenv("AIRBNB_CSV_PATH", "data/airbnb_sample_100.csv")
-EVENTS_PATH = os.getenv("HOLIDAYS_CSV_PATH", "data/holidays_sample_100.csv")
+
+# Prefer EVENTS_CSV_PATH (combined events), fallback to HOLIDAYS_CSV_PATH, then default
+EVENTS_PATH = os.getenv("EVENTS_CSV_PATH") or os.getenv("HOLIDAYS_CSV_PATH") or "data/holidays_sample_100.csv"
 
 # =========================
-# Major keywords (token-style) - same spirit as Databricks
+# Major keywords (token-style) — similar spirit to Databricks
 # =========================
 MAJOR_KEYWORDS = [
     "newyear", "christmas", "easter", "thanksgiving",
@@ -27,6 +29,9 @@ MAJOR_KEYWORDS = [
     "revolution", "unification", "labor", "mayday",
 ]
 
+# -------------------------
+# Helpers: text / flags
+# -------------------------
 def _norm_tokens(s: str) -> str:
     s = (s or "").lower()
     return "".join(ch for ch in s if ch.isalnum())
@@ -48,8 +53,7 @@ def _season_boost(d: pd.Timestamp) -> float:
     return 1.0
 
 def _type_weight(holiday_type: Optional[str]) -> float:
-    ht = (holiday_type or "")
-    ht = str(ht).lower().strip()
+    ht = str(holiday_type or "").lower().strip()
 
     if "public holiday" in ht: return 1.00
     if "national holiday" in ht: return 1.00
@@ -74,27 +78,9 @@ def _lead_days_used(base_lead: int, event_type: str, is_major: bool) -> int:
         return max(base_lead, 21)
     return base_lead
 
-def _why_tags(row: pd.Series) -> str:
-    tags: List[str] = []
-    if row.get("event_type", "") == "worldcup":
-        tags.append("World Cup event")
-    elif row["is_major"]:
-        tags.append("Major holiday")
-
-    if row["is_weekend"]:
-        tags.append("Weekend")
-
-    tags.append(f"In {int(row['days_to_event'])} days")
-    tags.append(f"Score={row['score']:.3f}")
-
-    if pd.notna(row.get("holiday_type")) and str(row.get("holiday_type")).strip():
-        tags.append(f"Type: {row['holiday_type']}")
-
-    if row.get("rating_value") is not None and not pd.isna(row.get("rating_value")):
-        tags.append(f"Rating={float(row['rating_value']):.2f}")
-
-    return ", ".join(tags)
-
+# -------------------------
+# Helpers: price / rating
+# -------------------------
 def _safe_float(v) -> Optional[float]:
     try:
         if v is None:
@@ -124,7 +110,6 @@ def _extract_first_number(x) -> Optional[float]:
         return None
 
 def _extract_rating(airbnb_row: pd.Series) -> Optional[float]:
-    # Prefer already-clean rating_value if exists, else try common candidates
     candidates = [
         "rating_value", "rating", "ratings", "review_rating", "avg_rating", "overall_rating",
         "category_rating"
@@ -134,14 +119,12 @@ def _extract_rating(airbnb_row: pd.Series) -> Optional[float]:
             v = _extract_first_number(airbnb_row.get(c))
             if v is None:
                 continue
-            # clamp to plausible rating range
             if 0 < v <= 5.0:
                 return float(v)
-            # sometimes ratings are given as 90/100 etc -> ignore
     return None
 
 def _quality_factor_from_rating(r: Optional[float]) -> float:
-    # Simple, bounded, interpretable: 0.95..1.15
+    # bounded + interpretable: 0.95..1.15
     if r is None:
         return 1.00
     if r >= 4.8:
@@ -154,6 +137,17 @@ def _quality_factor_from_rating(r: Optional[float]) -> float:
         return 1.00
     return 0.95
 
+def _extract_base_price(airbnb_row: pd.Series) -> Optional[float]:
+    for col in ["price_clean", "total_price_clean", "nightly_price", "price", "base_price", "avg_price"]:
+        if col in airbnb_row.index:
+            x = _safe_float(airbnb_row.get(col))
+            if x is not None:
+                return x
+    return None
+
+# -------------------------
+# Pricing: cap + monotonic mapping(score->uplift)
+# -------------------------
 def _caps_by_event_type(event_type: str, is_major: bool) -> float:
     et = (event_type or "").lower().strip()
     if et == "worldcup":
@@ -163,27 +157,44 @@ def _caps_by_event_type(event_type: str, is_major: bool) -> float:
     return 15.0
 
 def _uplift_from_score(score: float, cap: float, quality_factor: float) -> float:
-    # Monotonic mapping score -> [0..cap], then multiply by quality factor and clamp to cap
     score = max(float(score), 0.0)
-
-    # convert to 0..1 smoothly (works well without calibration)
     score_norm = 1.0 - math.exp(-score / 1.2)  # 0..1
-
     pct = score_norm * cap
     pct = pct * float(quality_factor)
-
-    # bound to [0..cap]
     pct = max(0.0, min(pct, cap))
     return round(pct, 1)
 
-def _extract_base_price(airbnb_row: pd.Series) -> Optional[float]:
-    for col in ["price_clean", "total_price_clean", "nightly_price", "price", "base_price", "avg_price"]:
-        if col in airbnb_row.index:
-            x = _safe_float(airbnb_row.get(col))
-            if x is not None:
-                return x
-    return None
+# -------------------------
+# Explainability ("why")
+# -------------------------
+def _why_tags(row: pd.Series) -> str:
+    tags: List[str] = []
 
+    et = str(row.get("event_type", "")).lower().strip()
+    if et == "worldcup":
+        tags.append("World Cup event")
+    elif bool(row.get("is_major", False)):
+        tags.append("Major holiday")
+
+    if bool(row.get("is_weekend", False)):
+        tags.append("Weekend")
+
+    tags.append(f"In {int(row['days_to_event'])} days")
+    tags.append(f"Score={float(row['score']):.3f}")
+
+    ht = row.get("holiday_type")
+    if pd.notna(ht) and str(ht).strip():
+        tags.append(f"Type: {ht}")
+
+    rv = row.get("rating_value")
+    if rv is not None and not pd.isna(rv):
+        tags.append(f"Rating={float(rv):.2f}")
+
+    return ", ".join(tags)
+
+# =========================
+# Loaders (cached)
+# =========================
 @lru_cache(maxsize=1)
 def _load_airbnb() -> pd.DataFrame:
     if not os.path.exists(AIRBNB_PATH):
@@ -201,7 +212,10 @@ def _load_airbnb() -> pd.DataFrame:
 @lru_cache(maxsize=1)
 def _load_events() -> pd.DataFrame:
     if not os.path.exists(EVENTS_PATH):
-        raise FileNotFoundError(f"Missing file: {EVENTS_PATH}")
+        raise FileNotFoundError(
+            f"Missing file: {EVENTS_PATH}. "
+            f"Set EVENTS_CSV_PATH (recommended) or HOLIDAYS_CSV_PATH."
+        )
 
     df = pd.read_csv(EVENTS_PATH)
 
@@ -210,7 +224,7 @@ def _load_events() -> pd.DataFrame:
 
     df["country_mapped"] = df["country_mapped"].astype(str).str.strip().str.lower()
 
-    # date column
+    # Date column
     date_col = None
     for c in ["date", "holiday_date", "event_date"]:
         if c in df.columns:
@@ -219,7 +233,7 @@ def _load_events() -> pd.DataFrame:
     if date_col is None:
         raise ValueError("Events CSV must have a date column: date / holiday_date / event_date")
 
-    # event name column
+    # Event name column
     if "event_name" not in df.columns:
         if "holiday_name" in df.columns:
             df["event_name"] = df["holiday_name"].astype(str)
@@ -228,7 +242,7 @@ def _load_events() -> pd.DataFrame:
         else:
             df["event_name"] = "Event"
 
-    # event type column
+    # Event type column (optional)
     if "event_type" not in df.columns:
         df["event_type"] = "holiday"
     else:
@@ -243,6 +257,9 @@ def _load_events() -> pd.DataFrame:
 
     return df[["country_mapped", "event_name", "date", "event_type", "holiday_type"]].copy()
 
+# =========================
+# Main function
+# =========================
 def recommend_publish_date(
     property_id: str,
     today,
@@ -274,7 +291,7 @@ def recommend_publish_date(
     data_price = _extract_base_price(airbnb_row)
     base_price_used = user_price if user_price is not None else data_price
 
-    # rating + quality factor (quality)
+    # rating -> quality factor
     rating_value = _extract_rating(airbnb_row)
     quality_factor = _quality_factor_from_rating(rating_value)
 
@@ -295,11 +312,10 @@ def recommend_publish_date(
     e["days_to_event"] = (e["date"] - today_dt).dt.days
     e["is_weekend"] = e["date"].dt.weekday.isin([4, 5, 6])
 
-    # Major logic: worldcup always major-like
     e["is_worldcup"] = e["event_type"].astype(str).str.lower().eq("worldcup")
     e["is_major"] = e["event_name"].astype(str).apply(_is_major_event) | e["is_worldcup"]
 
-    # Multipliers (demand-related components)
+    # Multipliers
     e["major_boost"] = 1.0
     e.loc[e["is_worldcup"], "major_boost"] = 1.60
     e.loc[(~e["is_worldcup"]) & (e["is_major"]), "major_boost"] = 1.45
@@ -308,13 +324,13 @@ def recommend_publish_date(
     e["season_boost"] = e["date"].map(_season_boost)
     e["type_weight"] = e.apply(lambda r: _type_weight(r.get("holiday_type")), axis=1)
 
-    # Closeness (Databricks-like): favors nearer events
+    # Closeness (time decay) — demand proxy simplified for offline
     e["closeness"] = e["days_to_event"].apply(lambda x: math.exp(-float(x) / 30.0))
 
-    # Final score (Demand proxy simplified for offline: closeness × multipliers)
+    # Final score
     e["score"] = e["closeness"] * e["major_boost"] * e["type_weight"] * e["weekend_boost"] * e["season_boost"]
 
-    # Publish date logic with lead days rules (Databricks-like)
+    # Publish date
     e["lead_days_used"] = e.apply(
         lambda r: _lead_days_used(int(base_lead_days), str(r.get("event_type", "")), bool(r["is_major"])),
         axis=1
@@ -328,17 +344,21 @@ def recommend_publish_date(
     e["campaign_peak"] = e["date"]
     e["campaign_end"] = e["date"] + pd.Timedelta(days=2)
 
-    # Pricing uplift = f(score) × quality_factor, capped by event type
+    # Pricing uplift: monotonic(score) + caps + quality
     e["cap_pct"] = e.apply(lambda r: _caps_by_event_type(str(r.get("event_type", "")), bool(r["is_major"])), axis=1)
-    e["uplift_pct"] = e.apply(lambda r: _uplift_from_score(float(r["score"]), float(r["cap_pct"]), float(quality_factor)), axis=1)
+    e["uplift_pct"] = e.apply(
+        lambda r: _uplift_from_score(float(r["score"]), float(r["cap_pct"]), float(quality_factor)),
+        axis=1
+    )
 
     if base_price_used is not None:
         e["recommended_price"] = (base_price_used * (1.0 + e["uplift_pct"] / 100.0)).round(2)
     else:
         e["recommended_price"] = None
 
-    # Why
+    # Explainability
     e["rating_value"] = rating_value
+    e["quality_factor"] = quality_factor
     e["why"] = e.apply(_why_tags, axis=1)
 
     ranked = e.sort_values(["score", "date"], ascending=[False, True]).reset_index(drop=True)
@@ -374,7 +394,3 @@ def recommend_publish_date(
         "best": _pack(best),
         "alternatives": alternatives,
     }, None
-
-
-
-
